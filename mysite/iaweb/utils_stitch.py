@@ -1,128 +1,105 @@
-# ─── desactivar OpenCL ANTES de cargar cv2 ───────────────────────
-import os
-os.environ["OPENCV_OPENCL_RUNTIME"] = "disabled"   # fuerza CPU
-
-import cv2
-cv2.ocl.setUseOpenCL(False)                        # doble seguridad
-# ────────────────────────────────────────────────────────────────
-
-import numpy as np
-from django.core.files.base import ContentFile
+# ───── Desactivar OpenCL de OpenCV (evita crash en Windows) ───────────
+import os, cv2, numpy as np, time
 from io import BytesIO
 from PIL import Image
+from django.core.files.base import ContentFile
 from tqdm import tqdm
-import time
+os.environ["OPENCV_OPENCL_RUNTIME"] = "disabled"
+cv2.ocl.setUseOpenCL(False)
+# ──────────────────────────────────────────────────────────────────────
 
-WHITE_PIX_THRESHOLD = 0.60
-DOWNSCALE_FACTOR    = 0.25        # 25 % (menos RAM / key-points)
+#  --- parámetros “rápidos” ----------------------------------------------------
+DOWNSCALE_FACTOR = .30     # 30 % ⇒ ±4 × más rápido al empalmar
+BLACK_RATIO      = .65     # ≥65 % negro ⇒ descartar frame
+MIN_KEYPOINTS    = 60      # <60 kp SIFT  ⇒ descartar frame
+# ------------------------------------------------------------------------------
 
+_sift = cv2.SIFT_create()
 
-# ────────────────────────────────────────────────────────────────
-#  Filtros
-# ────────────────────────────────────────────────────────────────
-def is_mostly_white(cv_img, ratio=WHITE_PIX_THRESHOLD):
-    gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-    white = np.sum(gray > 240)
-    return white / gray.size >= ratio
+# ─────────────────────────////  C R O P  ////─────────────────────────
+def _crop_circle_to_square(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY)
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return img
+    (x, y), r = cv2.minEnclosingCircle(max(cnts, key=cv2.contourArea))
+    s = int(int(r) / 1.4142)                 # r / √2
+    cx, cy = int(x), int(y)
+    x0, y0, x1, y1 = cx - s, cy - s, cx + s, cy + s
+    return img[max(0, y0):min(img.shape[0], y1),
+               max(0, x0):min(img.shape[1], x1)]
 
+def _crop_freeform(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY)
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return img
+    x, y, w, h = cv2.boundingRect(max(cnts, key=cv2.contourArea))
+    return img[y:y + h, x:x + w]
 
-def build_useful_images(sample):
-    imgs = list(sample.images.filter(is_mosaic=False).order_by("id"))
-    useful = []
-    t0 = time.time()
+def _mostly_black(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return (gray < 30).mean() >= BLACK_RATIO
 
-    for simg in tqdm(imgs, desc="Filtrando imágenes", unit="img"):
-        cv_img = cv2.imread(simg.image.path)
-        small  = cv2.resize(cv_img, None, fx=DOWNSCALE_FACTOR, fy=DOWNSCALE_FACTOR)
-        if is_mostly_white(small):
+def _too_few_features(img):
+    kp = _sift.detect(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), None)
+    return len(kp) < MIN_KEYPOINTS
+
+# ─────────────────────────////  P R O C E S O  ////───────────────────
+def _gather(sample, mode="square"):
+    raw = list(sample.images.filter(is_mosaic=False).order_by("id"))
+    useful, t0 = [], time.time()
+    crop_fn = _crop_circle_to_square if mode == "square" else _crop_freeform
+
+    for simg in tqdm(raw, desc="Filtrando imágenes", unit="img"):
+        img = cv2.imread(simg.image.path)
+        img = crop_fn(img)
+
+        thumb = cv2.resize(img, None, fx=DOWNSCALE_FACTOR, fy=DOWNSCALE_FACTOR)
+        if _mostly_black(thumb) or _too_few_features(thumb):
             continue
-        useful.append(simg)
+        useful.append(img)
 
-    print(f"Filtro blancos: {len(useful)}/{len(imgs)} válidas "
-          f"en {time.time() - t0:.1f}s")
+    print(f"Quedan {len(useful)}/{len(raw)} útiles ({time.time()-t0:.1f}s)")
     return useful
 
+def _resize(imgs):
+    return [cv2.resize(i, None, fx=DOWNSCALE_FACTOR, fy=DOWNSCALE_FACTOR) for i in imgs]
 
-# ────────────────────────────────────────────────────────────────
-#  Crop opcional
-# ────────────────────────────────────────────────────────────────
-def smart_crop(cv_img):
-    gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-    _, th  = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY_INV)
-    cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not cnts:
-        return cv_img
-    x, y, w, h = cv2.boundingRect(max(cnts, key=cv2.contourArea))
-    return cv_img[y:y+h, x:x+w]
+def _opencv_stitch(imgs):
+    for mode in (cv2.Stitcher_PANORAMA, cv2.Stitcher_SCANS):
+        try:
+            stat, pano = cv2.Stitcher_create(mode).stitch(imgs)
+            if stat == cv2.Stitcher_OK:
+                return pano
+        except cv2.error as e:
+            # Error típico de FLANN cuando no hay matches suficientes
+            print("OpenCV error:", e)
+    raise RuntimeError("Stitching OpenCV falló (muy pocos matches entre frames)")
 
-
-# ────────────────────────────────────────────────────────────────
-#  OpenCV stitching con fallback
-# ────────────────────────────────────────────────────────────────
-def _try_stitch(cv_imgs, mode):
-    stitcher = cv2.Stitcher_create(mode)
-    status, pano = stitcher.stitch(cv_imgs)
-    return status, pano
-
-
-def _opencv_stitch(cv_imgs):
-    status, pano = _try_stitch(cv_imgs, cv2.Stitcher_PANORAMA)
-    if status == cv2.Stitcher_OK:
-        return pano
-    print(f"PANORAMA falló ({status}), probando SCANS…")
-
-    status, pano = _try_stitch(cv_imgs, cv2.Stitcher_SCANS)
-    if status == cv2.Stitcher_OK:
-        return pano
-    raise RuntimeError(f"Stitching failed (PANORAMA={status}, SCANS={status})")
-
-
-# ────────────────────────────────────────────────────────────────
-#  Modos públicos
-# ────────────────────────────────────────────────────────────────
-def _resize_list(imgs, scale=DOWNSCALE_FACTOR):
-    return [cv2.resize(img, None, fx=scale, fy=scale) for img in imgs]
-
+# ─────────────────────────////  A P I   P Ú B L I C A  ////───────────
+def stitch_cropped(sample):
+    imgs = _gather(sample, "square")
+    if not imgs:
+        raise RuntimeError("No hay imágenes útiles")
+    print("→ Stitching cropped (cuadrado)…")
+    return _opencv_stitch(_resize(imgs))
 
 def stitch_circular(sample):
-    sims = build_useful_images(sample)
-    if not sims:
-        raise RuntimeError("No images after filtering")
+    imgs = _gather(sample, "circle")
+    if not imgs:
+        raise RuntimeError("No hay imágenes útiles")
+    print("→ Stitching circular…")
+    return _opencv_stitch(_resize(imgs))
 
-    t0 = time.time()
-    cv_imgs = _resize_list([cv2.imread(s.image.path) for s in sims])
-    print("→ OpenCV stitching (circular)…")
-    pano = _opencv_stitch(cv_imgs)
-    print(f"Stitch circular listo en {time.time() - t0:.1f}s")
-    return pano
-
-
-def stitch_cropped(sample):
-    sims = build_useful_images(sample)
-    if not sims:
-        raise RuntimeError("No images after filtering")
-
-    t0 = time.time()
-    raw = [smart_crop(cv2.imread(s.image.path)) for s in sims]
-    h0, w0 = raw[0].shape[:2]
-    cv_imgs = [cv2.resize(img, (w0, h0)) for img in raw]
-    cv_imgs = _resize_list(cv_imgs)                 # bajar a 25 %
-    print("→ OpenCV stitching (cropped)…")
-    pano = _opencv_stitch(cv_imgs)
-    print(f"Stitch cropped listo en {time.time() - t0:.1f}s")
-    return pano
-
-
-# ────────────────────────────────────────────────────────────────
-#  Guardar mosaico
-# ────────────────────────────────────────────────────────────────
+# ─────────────────────────////  G U A R D A R  ////───────────────────
 def save_mosaic(sample, cv_img, suffix):
     rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-    pil = Image.fromarray(rgb)
     buf = BytesIO()
-    pil.save(buf, format="JPEG", quality=95)
-    filename = f"{sample.id}_{suffix}.jpg"
+    Image.fromarray(rgb).save(buf, "JPEG", quality=95)
     return sample.images.create(
         is_mosaic=True,
-        image=ContentFile(buf.getvalue(), name=filename)
-    )
+        image=ContentFile(buf.getvalue(),
+                          name=f"{sample.id}_{suffix}.jpg"))
