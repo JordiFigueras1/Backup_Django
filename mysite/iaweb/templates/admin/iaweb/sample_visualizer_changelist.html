@@ -1,0 +1,34 @@
+{#  iaweb/templates/admin/iaweb/sample_visualizer_changelist.html  #}
+{% extends "admin/change_list.html" %}
+
+{# ────────────────────────────────────────────────────────────────
+   Quitamos botón “Add” (sólo lectura)
+   ──────────────────────────────────────────────────────────────── #}
+{% block object-tools-items %}{% endblock object-tools-items %}
+
+{# ────────────────────────────────────────────────────────────────
+   Encabezado con selector de muestra
+   ──────────────────────────────────────────────────────────────── #}
+{% block content %}
+  <form method="get" class="mb-6 space-x-2">
+    <label for="sample" class="text-sm font-medium">
+      Selecciona una muestra:
+    </label>
+
+    <select
+      id="sample" name="sample"
+      class="rounded-md bg-gray-800 border border-gray-600 p-2"
+      onchange="this.form.submit()">
+
+      {% for s in samples %}
+        <option
+          value="{{ s.id }}"
+          {% if s.id|stringformat:"s" == selected_sample|stringformat:"s" %}selected{% endif %}>
+          {{ s.id }} — {{ s.patient.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </form>
+
+  {{ block.super }}   {#  ← mantiene la tabla de resultados del admin  #}
+{% endblock content %}
