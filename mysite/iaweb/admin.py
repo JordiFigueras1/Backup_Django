@@ -1,5 +1,9 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.utils.html import format_html
+
+# ─── helpers para stitching ──────────────────────────────────────
+from .utils_stitch import stitch_circular, stitch_cropped, save_mosaic
+
 from .models import (
     Patient, Sample, DiagnosisReport, Disease,
     SampleImage, HealthCenter, SampleImageVisualizer
@@ -18,7 +22,7 @@ class PatientAdmin(ModelAdmin):
 
 
 # =====================================================================
-# MUESTRAS
+# MUESTRAS  (ahora con acciones de stitching)
 # =====================================================================
 @admin.register(Sample)
 class SampleAdmin(ModelAdmin):
@@ -26,6 +30,45 @@ class SampleAdmin(ModelAdmin):
                     'patient', 'health_center', 'date_published')
     list_filter = ('available', 'date_published')
     search_fields = ('sample_type', 'patient__name')
+
+    # ─── acciones de stitching ───────────────────────────────────
+    @admin.action(description="Stitch circular mosaic")
+    def make_stitch_circular(self, request, queryset):
+        for sample in queryset:
+            try:
+                pano = stitch_circular(sample)
+                save_mosaic(sample, pano, "circular")
+                self.message_user(
+                    request,
+                    f"Mosaico circular creado para {sample.id}",
+                    level=messages.SUCCESS
+                )
+            except Exception as exc:
+                self.message_user(
+                    request,
+                    f"{sample.id}: {exc}",
+                    level=messages.ERROR
+                )
+
+    @admin.action(description="Stitch cropped mosaic")
+    def make_stitch_cropped(self, request, queryset):
+        for sample in queryset:
+            try:
+                pano = stitch_cropped(sample)
+                save_mosaic(sample, pano, "cropped")
+                self.message_user(
+                    request,
+                    f"Mosaico cropped creado para {sample.id}",
+                    level=messages.SUCCESS
+                )
+            except Exception as exc:
+                self.message_user(
+                    request,
+                    f"{sample.id}: {exc}",
+                    level=messages.ERROR
+                )
+
+    actions = ["make_stitch_circular", "make_stitch_cropped"]
 
 
 # =====================================================================
@@ -58,14 +101,17 @@ class DiagnosisReportAdmin(admin.ModelAdmin):
             sample_images = sample.images.all()
             extra_context = extra_context or {}
             extra_context['sample_images'] = sample_images
-        return super().change_view(request, object_id, form_url, extra_context=extra_context)
+        return super().change_view(request, object_id, form_url,
+                                   extra_context=extra_context)
 
     def sample_images_image_field(self, obj):
         images = obj.sample.images.all()
         image_tags = [
             format_html(
-                '<a href="{0}" target="_blank"><img src="{0}" width="50" height="50" /><br /></a>',
-                image.detected_image.url) for image in images
+                '<a href="{0}" target="_blank"><img src="{0}" width="50" '
+                'height="50" /><br /></a>',
+                image.detected_image.url
+            ) for image in images
         ]
         return format_html(' '.join(image_tags))
 
@@ -91,7 +137,10 @@ class SampleImageAdmin(admin.ModelAdmin):
 
     def image_thumbnail(self, obj):
         if obj.image:
-            return format_html('<img src="{}" style="height: 50px;" />', obj.image.url)
+            return format_html(
+                '<img src="{}" style="height: 50px;" />',
+                obj.image.url
+            )
         return '-'
 
     image_thumbnail.short_description = 'Image'
@@ -107,7 +156,7 @@ class SampleImageAdmin(admin.ModelAdmin):
 
 
 # =====================================================================
-# ────────  NUEVO  ➜  VISUALIZER   ────────────────────────────────────
+# ────────  VISUALIZER   ─────────────────────────────────────────────
 # =====================================================================
 @admin.register(SampleImageVisualizer)
 class SampleImageVisualizerAdmin(admin.ModelAdmin):
@@ -117,7 +166,8 @@ class SampleImageVisualizerAdmin(admin.ModelAdmin):
     """
     change_list_template = "admin/iaweb/sample_visualizer_changelist.html"
 
-    list_display = ('thumbnail', 'id', 'sample', 'patient_name', 'date_published')
+    list_display = ('thumbnail', 'id', 'sample',
+                    'patient_name', 'date_published')
     list_select_related = ('sample__patient',)
     list_per_page = 300
     ordering = ('sample', 'id')
@@ -147,19 +197,19 @@ class SampleImageVisualizerAdmin(admin.ModelAdmin):
         if sample_id:
             qs = qs.filter(sample_id=sample_id)
         else:
-            first_sample = (
-                Sample.objects.order_by("date_published").first()
-            )
+            first_sample = Sample.objects.order_by("date_published").first()
             if first_sample:
                 qs = qs.filter(sample=first_sample)
         return qs
 
     def changelist_view(self, request, extra_context=None):
         extra_context = extra_context or {}
-        samples = Sample.objects.select_related("patient").order_by("-date_published")
+        samples = Sample.objects.select_related("patient")\
+                                .order_by("-date_published")
         extra_context["samples"] = samples
         extra_context["selected_sample"] = request.GET.get(
             "sample",
             samples.first().id if samples else None
         )
-        return super().changelist_view(request, extra_context=extra_context)
+        return super().changelist_view(request,
+                                       extra_context=extra_context)
