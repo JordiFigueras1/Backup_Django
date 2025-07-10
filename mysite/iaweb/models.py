@@ -2,13 +2,19 @@ import uuid
 from django.db import models
 
 
+# ════════════════════════════════════════════════════════════════
+#  PACIENTE
+# ════════════════════════════════════════════════════════════════
 class Patient(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200, verbose_name="Patient Name")
     age = models.IntegerField(verbose_name="Patient Age")
-    sex = models.CharField(max_length=10, choices=[('M', 'Male'), ('F', 'Female')], verbose_name="Sex")
+    sex = models.CharField(max_length=10,
+                           choices=[('M', 'Male'), ('F', 'Female')],
+                           verbose_name="Sex")
     symptoms = models.TextField(verbose_name="Symptoms", blank=True, null=True)
-    observations = models.TextField(verbose_name="Observations", blank=True, null=True)
+    observations = models.TextField(verbose_name="Observations",
+                                    blank=True, null=True)
     date_published = models.DateTimeField("Date Published")
 
     def __str__(self):
@@ -20,10 +26,14 @@ class Patient(models.Model):
         ordering = ['name']
 
 
+# ════════════════════════════════════════════════════════════════
+#  CENTRO DE SALUD
+# ════════════════════════════════════════════════════════════════
 class HealthCenter(models.Model):
     name = models.CharField(max_length=100, verbose_name="Health Center Name")
     city = models.CharField(max_length=100, verbose_name="Health Center City")
-    country = models.CharField(max_length=100, verbose_name="Health Center Country")
+    country = models.CharField(max_length=100,
+                               verbose_name="Health Center Country")
     date_published = models.DateTimeField("Date Published")
 
     def __str__(self):
@@ -35,6 +45,9 @@ class HealthCenter(models.Model):
         ordering = ['name']
 
 
+# ════════════════════════════════════════════════════════════════
+#  MUESTRA
+# ════════════════════════════════════════════════════════════════
 class Sample(models.Model):
     BLOOD = 'Blood'
     URINE = 'Urine'
@@ -46,9 +59,11 @@ class Sample(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     patient = models.ForeignKey(
         Patient, on_delete=models.PROTECT, related_name='patient')
-    sample_type = models.CharField(max_length=5, choices=SAMPLE_TYPE_CHOICES)
+    sample_type = models.CharField(max_length=5,
+                                   choices=SAMPLE_TYPE_CHOICES)
     health_center = models.ForeignKey(
-        HealthCenter, on_delete=models.PROTECT, related_name='health_center', default=1)
+        HealthCenter, on_delete=models.PROTECT,
+        related_name='health_center', default=1)
     date_published = models.DateTimeField("Date Published")
     available = models.BooleanField(default=True, verbose_name="Available")
 
@@ -61,6 +76,9 @@ class Sample(models.Model):
         ordering = ['-date_published']
 
 
+# ════════════════════════════════════════════════════════════════
+#  SUB-IMAGEN DE LA MUESTRA
+# ════════════════════════════════════════════════════════════════
 class SampleImage(models.Model):
 
     def sample_image_upload_to(instance, filename):
@@ -80,6 +98,9 @@ class SampleImage(models.Model):
     detected_image = models.ImageField(
         upload_to=sample_image_upload_to_detection, null=True, blank=True)
 
+    # ─── NUEVO ───
+    is_mosaic = models.BooleanField(default=False, editable=False)
+
     def __str__(self):
         return f"Images for {self.sample.id}"
 
@@ -89,9 +110,9 @@ class SampleImage(models.Model):
         ordering = ['-date_published']
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# NUEVO  ➜  proxy-model para el “Visualizer” del admin
-# ──────────────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+#  PROXY para el VISUALIZER
+# ════════════════════════════════════════════════════════════════
 class SampleImageVisualizer(SampleImage):
     """Proxy que usa la misma tabla de SampleImage pero se mostrará como
     'Visualizer' en la barra lateral del admin."""
@@ -101,6 +122,9 @@ class SampleImageVisualizer(SampleImage):
         verbose_name_plural = "Visualizer"
 
 
+# ════════════════════════════════════════════════════════════════
+#  ENFERMEDAD
+# ════════════════════════════════════════════════════════════════
 class Disease(models.Model):
     name = models.CharField(max_length=50, unique=True)
     description = models.TextField(blank=True, null=True)
@@ -114,6 +138,9 @@ class Disease(models.Model):
         ordering = ['name']
 
 
+# ════════════════════════════════════════════════════════════════
+#  INFORME DE DIAGNÓSTICO
+# ════════════════════════════════════════════════════════════════
 class DiagnosisReport(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sample = models.ForeignKey(
