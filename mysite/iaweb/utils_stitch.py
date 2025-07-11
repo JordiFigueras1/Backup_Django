@@ -38,7 +38,7 @@ DOWNSCALE_FACTOR = 0.25     # escala de las miniaturas para los filtros (0-1)
 BLACK_RATIO      = 0.65     # ≥ 65 % negro  → descartar
 WHITE_RATIO      = 0.10     # ≥ 30 % blanco → descartar
 MIN_KEYPOINTS    = 60       # < 60 puntos SIFT → descartar
-MAX_FRAMES       = 49       # límite superior de teselas
+MAX_FRAMES       = 81       # límite superior de teselas
 BORDER_PX        = 0        # borde permanente (0 = sin borde)
 BORDER_THUMB     = 1        # borde solo en el PNG de depuración
 THUMB_GRID_SIDE  = 150      # tamaño de cada miniatura en el PNG
